@@ -4,6 +4,7 @@ import random
 from threading import Timer
 from PIL import Image, ImageDraw, ImageFont
 import os
+import requests  # requests kütüphanesini ekleyin
 
 # Bot Token
 TOKEN = '7912106541:AAHZI3rwpZCbGXt508FqaY9kE-gdIsZFNU8'
@@ -16,8 +17,8 @@ bets = {}
 active_games = set()  # Aktif oyunları takip etmek için
 registrations = set()  # Kayıt olan kullanıcıları takip etmek için
 
-# Rulet görselleri klasör yolu
-roulette_images_folder = '/storage/emulated/0/Rulet/'
+# Rulet görselleri GitHub URL'si
+roulette_images_base_url = 'https://raw.githubusercontent.com/doruk48/rulet_images/main/'
 
 # Rulet sayılarının renkleri
 roulette_colors = {
@@ -82,29 +83,46 @@ def check_balance(message):
     )
     bot.send_message(chat_id, balance_text)
 
-# Para gönderme komutu
-@bot.message_handler(commands=['send'])
-def send_money(message):
+
+# Para gönderme komutu (reply ile)
+@bot.message_handler(commands=['moneys'])
+def send_money_reply(message):
     chat_id = message.chat.id
     user_id = message.from_user.id
-    try:
-        parts = message.text.split()
-        target_id = int(parts[1])
-        amount = int(parts[2])
-        target_name = get_username(target_id)
 
-        if user_balances[user_id] >= amount:
-            user_balances[user_id] -= amount
-            user_balances[target_id] = user_balances.get(target_id, 0) + amount
-            bot.send_message(
-                chat_id,
-                f"💸 {get_username(user_id)}, {target_name}'ye {format_amount(amount)} gönderdi.\n"
-                f"✅ Yeni bakiyeniz: {format_amount(user_balances[user_id])}"
-            )
-        else:
-            bot.send_message(chat_id, "❌ Yetersiz bakiye!")
-    except (IndexError, ValueError):
-        bot.send_message(chat_id, "❌ Geçersiz komut. Kullanım: /send [ID] [miktar]")
+    # Yanıtlanan mesajı kontrol et
+    if message.reply_to_message:
+        try:
+            # Gönderilecek miktarı al
+            amount = int(message.text.split()[1])
+            
+            # Yanıtlanan mesajın sahibinin ID'sini al
+            target_id = message.reply_to_message.from_user.id
+            target_name = get_username(target_id)
+
+            # Gönderenin bakiyesini kontrol et
+            if user_balances.get(user_id, 0) >= amount:
+                # Gönderenin bakiyesinden düş
+                user_balances[user_id] -= amount
+                # Alıcının bakiyesine ekle
+                user_balances[target_id] = user_balances.get(target_id, 0) + amount
+
+                # Şık bir bildirim gönder
+                bot.send_message(
+                    chat_id,
+                    f"💸 **Para Transferi** 💸\n"
+                    f"👤 Gönderen: {get_username(user_id)}\n"
+                    f"👥 Alıcı: {target_name}\n"
+                    f"💰 Miktar: {format_amount(amount)}\n"
+                    f"✅ İşlem başarıyla tamamlandı!\n"
+                    f"📊 Yeni bakiyeniz: {format_amount(user_balances[user_id])}"
+                )
+            else:
+                bot.send_message(chat_id, "❌ Yetersiz bakiye! İşlem gerçekleştirilemedi.")
+        except (IndexError, ValueError):
+            bot.send_message(chat_id, "❌ Geçersiz komut. Kullanım: /moneys [miktar] (bir mesajı yanıtlayarak)")
+    else:
+        bot.send_message(chat_id, "❌ Lütfen bir mesajı yanıtlayarak kullanın. Örnek: /moneys 1000")
 
 # Liderlik tablosu komutu
 @bot.message_handler(commands=['leaderboard'])
@@ -133,13 +151,18 @@ def start_rulet(message):
     active_games.add(chat_id)
     user_balances.setdefault(user_id, 10000000000)  # Varsayılan bakiye (10B 🪙 DTC)
 
-    # Çark görselini gönder
+    # Çark görselini GitHub'dan yükle
     try:
-        image_path = f"{roulette_images_folder}rulet.çark.jpg"
-        with open(image_path, 'rb') as image_file:
-            bot.send_photo(chat_id, image_file, caption="🎰 Rulet oyunu başladı! Bahislerinizi yapın.")
-    except FileNotFoundError:
-        bot.send_message(chat_id, "❌ Çark görseli bulunamadı.")
+        image_url = f"{roulette_images_base_url}rulet.çark.jpg"
+        response = requests.get(image_url)
+        if response.status_code == 200:
+            bot.send_photo(chat_id, response.content, caption="🎰 Rulet oyunu başladı! Bahislerinizi yapın.")
+        else:
+            bot.send_message(chat_id, "❌ Çark görseli bulunamadı.")
+            active_games.remove(chat_id)
+            return
+    except Exception as e:
+        bot.send_message(chat_id, f"❌ Görsel yüklenirken bir hata oluştu: {e}")
         active_games.remove(chat_id)
         return
 
@@ -321,12 +344,15 @@ def roulette_game(chat_id):
         f"💔 Kaybedenler:\n" + "\n".join(losers)
     )
 
-    # Sonuç görseli gönder
+    # Sonuç görselini GitHub'dan yükle
     try:
-        image_path = f"{roulette_images_folder}rulet.{result}.jpg"
-        with open(image_path, 'rb') as image_file:
-            bot.send_photo(chat_id, image_file, caption=result_text)
-    except FileNotFoundError:
+        image_url = f"{roulette_images_base_url}rulet.{result}.jpg"
+        response = requests.get(image_url)
+        if response.status_code == 200:
+            bot.send_photo(chat_id, response.content, caption=result_text)
+        else:
+            bot.send_message(chat_id, result_text)
+    except Exception as e:
         bot.send_message(chat_id, result_text)
 
     bets.clear()
