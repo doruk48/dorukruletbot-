@@ -33,21 +33,16 @@ def load_balances():
     return {}
 
 # Kullanıcı bakiyeleri ve bahisler
-user_balances = load_balances()  # Bakiyeleri yükle
+user_balances = load_balances()
 user_names = {}
 bets = {}
 active_games = set()
 registrations = set()
+statistics = user_balances.get('statistics', {})
+
 # Bot Token
 TOKEN = '7912106541:AAHZI3rwpZCbGXt508FqaY9kE-gdIsZFNU8'
 bot = telebot.TeleBot(TOKEN)
-
-# Kullanıcı bakiyeleri ve bahisler
-user_balances = {}
-user_names = {}
-bets = {}
-active_games = set()  # Aktif oyunları takip etmek için
-registrations = set()  # Kayıt olan kullanıcıları takip etmek için
 
 # Rulet sayılarının renkleri
 roulette_colors = {
@@ -58,7 +53,6 @@ roulette_colors = {
     28: 'black', 29: 'black', 30: 'red', 31: 'black', 32: 'red', 33: 'black', 34: 'red', 
     35: 'black', 36: 'red'
 }
-
 
 # Yeni seviye eşikleri ve emojiler
 LEVELS = {
@@ -126,8 +120,14 @@ def start(message):
         ))
         registrations.add(user_id)
         user_balances[user_id] = 10000000000  # Başlangıç bonusu
+        statistics[user_id] = {
+            'total_bets': 0,
+            'total_wins': 0,
+            'total_losses': 0,
+            'max_win': 0,
+            'win_rate': 0
+        }
         bot.send_message(user_id, f"🎉 Tebrikler! 10B 🪙 başlangıç bonusu kazandınız. Şimdi rulet oynamaya başlayabilirsiniz.")
-
 
 # Günlük bonus verileri
 daily_bonus = {}
@@ -179,6 +179,7 @@ def daily_bonus_command(message):
         f"🔥 Streak: {streak} gün\n"
         f"💰 Yeni bakiyeniz: {format_amount(user_balances[user_id])}"
     ))
+
 # Kullanıcı adını değiştirme komutu
 @bot.message_handler(commands=['changename'])
 def change_name(message):
@@ -199,12 +200,18 @@ def check_balance(message):
 
     # Varsayılan bakiye ve bahis verileri
     balance = user_balances.get(user_id, 10000000000)  # Varsayılan bakiye
-    user_bets = bets.get(user_id, [])
-    total_bets = len(user_bets)  # Toplam bahis sayısı
-    total_wins = sum(amount for _, amount in user_bets if amount > 0)  # Toplam kazanç
-    total_losses = sum(abs(amount) for _, amount in user_bets if amount < 0)  # Toplam kayıp
-    max_win = max([amount for _, amount in user_bets], default=0)  # En yüksek kazanç
-    win_rate = (len([amount for _, amount in user_bets if amount > 0]) / total_bets * 100) if total_bets > 0 else 0  # Kazanma oranı
+    user_stats = statistics.get(user_id, {
+        'total_bets': 0,
+        'total_wins': 0,
+        'total_losses': 0,
+        'max_win': 0,
+        'win_rate': 0
+    })
+    total_bets = user_stats['total_bets']
+    total_wins = user_stats['total_wins']
+    total_losses = user_stats['total_losses']
+    max_win = user_stats['max_win']
+    win_rate = user_stats['win_rate']
     level = get_level(balance)  # Kullanıcı seviyesi
 
     # Formatlanmış metin
@@ -362,8 +369,7 @@ def black_bet(message):
         bot.send_message(chat_id, f"💵 {get_username(user_id)}: ⚫ Siyah için {format_amount(bet_amount)} bahis yaptınız.")
     except (IndexError, ValueError):
         bot.send_message(chat_id, "❌ Geçersiz komut. Kullanım: /black [bahis miktarı]")
-
-# Tek sayı bahisi komutu
+        # Tek sayı bahisi komutu
 @bot.message_handler(commands=['number'])
 def number_bet(message):
     chat_id = message.chat.id
@@ -432,13 +438,6 @@ def roulette_game(chat_id, wheel_message_id):
     except Exception as e:
         print("Çark görseli silinirken bir hata oluştu:", e)
 
-    # Rulet renklerini belirle
-    roulette_colors = {
-        0: 'green',
-        **{i: 'red' for i in [1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36]},
-        **{i: 'black' for i in [2, 4, 6, 8, 10, 11, 13, 15, 17, 20, 22, 24, 26, 28, 29, 31, 33, 35]}
-    }
-
     # Rulet sonucunu belirle
     result = random.choice([i for i in range(37)])
     result_color = roulette_colors[result]
@@ -481,8 +480,16 @@ def roulette_game(chat_id, wheel_message_id):
         # Kazanan ve kaybeden mesajlarını hazırla
         if total_winnings > 0:
             winners.append(f"✅ {get_username(user_id)}: {format_amount(total_winnings)} kazandı")
+            statistics[user_id]['total_wins'] += total_winnings
+            if total_winnings > statistics[user_id]['max_win']:
+                statistics[user_id]['max_win'] = total_winnings
         if total_losses > 0:
             losers.append(f"❌ {get_username(user_id)}: {format_amount(total_losses)} kaybetti")
+            statistics[user_id]['total_losses'] += total_losses
+
+        statistics[user_id]['total_bets'] += len(bets_list)
+        if statistics[user_id]['total_bets'] > 0:
+            statistics[user_id]['win_rate'] = (statistics[user_id]['total_wins'] / statistics[user_id]['total_bets']) * 100
 
     # Sonuç mesajını hazırla
     result_message = f"🎰 *Rulet Sonucu* 🎰\n\n"
@@ -504,66 +511,15 @@ def roulette_game(chat_id, wheel_message_id):
     bets.clear()
     active_games.remove(chat_id)
 
-
-@bot.message_handler(commands=['moneys'])
-def send_money(message):
-    chat_id = message.chat.id
-    user_id = message.from_user.id
-
-    try:
-        
-        # Yanıtlanan mesajı kontrol et
-        if not message.reply_to_message:
-            bot.send_message(chat_id, "❌ Lütfen bir mesajı yanıtlayarak para gönderin.\nÖrnek: /moneys 100M 🪙")
-            return
-
-        # Hedef kullanıcıyı ve miktarı al
-        target_id = message.reply_to_message.from_user.id
-        amount = int(message.text.split()[1])
-
-        # Kendine para göndermeyi engelle
-        if target_id == user_id:
-            bot.send_message(chat_id, "❌ Kendinize para gönderemezsiniz!")
-            return
-
-        # Hedef kullanıcı kayıtlı mı kontrol et
-        if target_id not in registrations:
-            bot.send_message(chat_id, "❌ Bu kullanıcı oyuna kayıtlı değil.")
-            return
-
-        # Bakiye kontrolü
-        if user_balances[user_id] < amount:
-            bot.send_message(chat_id, f"❌ Yetersiz bakiye! Mevcut bakiyeniz: {format_amount(user_balances[user_id])}")
-            return
-
-        # İşlem ücreti (örneğin %1)
-        fee = int(amount * 0.01)  # %1 işlem ücreti
-        total_amount = amount + fee
-
-        # Bakiyeleri güncelle
-        user_balances[user_id] -= total_amount
-        user_balances[target_id] += amount
-
-        # Transfer bilgilendirmesi
-        transfer_text = (
-            f"💸 *Para Transferi Başarılı!* 💸\n\n"
-            f"👤 Gönderen: {get_username(user_id)}\n"
-            f"👥 Alıcı: {get_username(target_id)}\n"
-            f"💰 Gönderilen Miktar: {format_amount(amount)}\n"
-            f"💸 İşlem Ücreti: {format_amount(fee)} (%1)\n"
-            f"🔢 Yeni Bakiyeniz: {format_amount(user_balances[user_id])}"
-        )
-        bot.send_message(chat_id, transfer_text, parse_mode="Markdown")
+    
+        # İstatistikleri kaydet
+        save_balances()
 
     except (IndexError, ValueError):
         bot.send_message(chat_id, "❌ Geçersiz komut. Kullanım: /moneys [miktar] (bir mesajı yanıtlayarak)\nÖrnek: /moneys 100M 🪙")
 
-
 @bot.message_handler(commands=['leaderboard'])
 def leaderboard(message):
-    # Debug mesajı ekleyerek kaç kez çağrıldığını kontrol edin
-    print("Liderlik tablosu gönderiliyor...")
-
     sorted_users = sorted(user_balances.items(), key=lambda x: x[1], reverse=True)
     top_users = sorted_users[:10]  # İlk 10 kullanıcıyı al
 
@@ -611,8 +567,9 @@ def leaderboard(message):
     # Alt bilgi
     leaderboard_text += "🔝 Daha yükseğe çıkmak için rulet oynamaya devam edin!"
 
-    # Mesajı gönder (SADECE BİR KEZ)
+    # Mesajı gönder
     bot.send_message(message.chat.id, leaderboard_text, parse_mode="Markdown")
+
 # Yardım komutu
 @bot.message_handler(commands=['help'])
 def help_command(message):
