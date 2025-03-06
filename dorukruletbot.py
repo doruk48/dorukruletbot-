@@ -5,6 +5,7 @@ from threading import Timer
 from datetime import datetime, timedelta
 import json
 import os
+import uuid  # Uniq oyun ID'leri oluşturmak için
 
 # .data klasörünü oluştur (eğer yoksa)
 if not os.path.exists('.data'):
@@ -32,11 +33,11 @@ def load_balances():
         print("Bakiye yüklenirken hata oluştu:", e)
     return {}
 
-# Kullanıcı bakiyeleri ve bahisler
+# Kullanıcı bakiyeleri
 user_balances = load_balances()
 user_names = {}
-bets = {}
-active_games = set()
+active_games = {}
+bets = {}  # Bahisleri tutmak için
 registrations = set()
 statistics = user_balances.get('statistics', {})
 
@@ -275,7 +276,6 @@ def check_level(message):
 # Rulet başlatma komutu
 @bot.message_handler(commands=['rulet'])
 def start_rulet(message):
-    global bets  # Global olarak deklarasyon
     chat_id = message.chat.id
     user_id = message.from_user.id
 
@@ -287,10 +287,11 @@ def start_rulet(message):
         bot.send_message(chat_id, "❌ Lütfen önce /start komutunu kullanarak kayıt olun.")
         return
 
-    active_games.add(chat_id)
+    game_id = str(uuid.uuid4())  # Benzersiz oyun ID'si oluştur
+    active_games[chat_id] = game_id
     user_balances.setdefault(user_id, 10000000000)  # Varsayılan bakiye (10B 🪙)
 
-    bot.send_message(chat_id, f"🎰 Rulet oyununa hoş geldiniz! Bakiyeniz: {format_amount(user_balances[user_id])}")
+    bot.send_message(chat_id, f"🎰 Rulet oyununa hoş geldiniz! Bakiyeniz: {format_amount(user_balances[user_id])}\nOyun ID: {game_id}")
     
     # Çark görselini gönder
     try:
@@ -298,14 +299,14 @@ def start_rulet(message):
         wheel_message = bot.send_photo(chat_id, image_url)
     except Exception as e:
         bot.send_message(chat_id, "❌ Çark görseli bulunamadı.")
-        active_games.remove(chat_id)
+        del active_games[chat_id]
         return
 
-    bets = {}  # Bahisleri temizle
+    bets[game_id] = {}  # Bahisleri temizle
     bot.send_message(chat_id, "⏳ Bahis yapmak için 25 saniyeniz var!")
 
     # 25 saniye sonra roulette_game fonksiyonunu çağır
-    Timer(25.0, roulette_game, args=[chat_id, wheel_message.message_id]).start()
+    Timer(25.0, roulette_game, args=[chat_id, game_id, wheel_message.message_id]).start()
 
 # Yeşil bahis komutu
 @bot.message_handler(commands=['green'])
@@ -313,7 +314,8 @@ def green_bet(message):
     chat_id = message.chat.id
     user_id = message.from_user.id
 
-    if chat_id not in active_games:
+    game_id = active_games.get(chat_id)
+    if not game_id:
         bot.send_message(chat_id, "❌ Aktif bir rulet oyunu bulunmamaktadır. Lütfen önce /rulet komutu ile bir oyun başlatın.")
         return
 
@@ -323,7 +325,7 @@ def green_bet(message):
             bot.send_message(chat_id, "❌ Yetersiz bakiye!")
             return
         user_balances[user_id] -= bet_amount
-        bets.setdefault(user_id, []).append(('green', bet_amount))
+        bets[game_id].setdefault(user_id, []).append(('green', bet_amount))
         bot.send_message(chat_id, f"💵 {get_username(user_id)}: 🟢 Yeşil için {format_amount(bet_amount)} bahis yaptınız.")
     except (IndexError, ValueError):
         bot.send_message(chat_id, "❌ Geçersiz komut. Kullanım: /green [bahis miktarı]")
@@ -334,7 +336,8 @@ def red_bet(message):
     chat_id = message.chat.id
     user_id = message.from_user.id
 
-    if chat_id not in active_games:
+    game_id = active_games.get(chat_id)
+    if not game_id:
         bot.send_message(chat_id, "❌ Aktif bir rulet oyunu bulunmamaktadır. Lütfen önce /rulet komutu ile bir oyun başlatın.")
         return
 
@@ -344,7 +347,7 @@ def red_bet(message):
             bot.send_message(chat_id, "❌ Yetersiz bakiye!")
             return
         user_balances[user_id] -= bet_amount
-        bets.setdefault(user_id, []).append(('red', bet_amount))
+        bets[game_id].setdefault(user_id, []).append(('red', bet_amount))
         bot.send_message(chat_id, f"💵 {get_username(user_id)}: 🔴 Kırmızı için {format_amount(bet_amount)} bahis yaptınız.")
     except (IndexError, ValueError):
         bot.send_message(chat_id, "❌ Geçersiz komut. Kullanım: /red [bahis miktarı]")
@@ -355,7 +358,8 @@ def black_bet(message):
     chat_id = message.chat.id
     user_id = message.from_user.id
 
-    if chat_id not in active_games:
+    game_id = active_games.get(chat_id)
+    if not game_id:
         bot.send_message(chat_id, "❌ Aktif bir rulet oyunu bulunmamaktadır. Lütfen önce /rulet komutu ile bir oyun başlatın.")
         return
 
@@ -365,17 +369,19 @@ def black_bet(message):
             bot.send_message(chat_id, "❌ Yetersiz bakiye!")
             return
         user_balances[user_id] -= bet_amount
-        bets.setdefault(user_id, []).append(('black', bet_amount))
+        bets[game_id].setdefault(user_id, []).append(('black', bet_amount))
         bot.send_message(chat_id, f"💵 {get_username(user_id)}: ⚫ Siyah için {format_amount(bet_amount)} bahis yaptınız.")
     except (IndexError, ValueError):
         bot.send_message(chat_id, "❌ Geçersiz komut. Kullanım: /black [bahis miktarı]")
-        # Tek sayı bahisi komutu
+
+# Tek sayı bahisi komutu
 @bot.message_handler(commands=['number'])
 def number_bet(message):
     chat_id = message.chat.id
     user_id = message.from_user.id
 
-    if chat_id not in active_games:
+    game_id = active_games.get(chat_id)
+    if not game_id:
         bot.send_message(chat_id, "❌ Aktif bir rulet oyunu bulunmamaktadır. Lütfen önce /rulet komutu ile bir oyun başlatın.")
         return
 
@@ -390,7 +396,7 @@ def number_bet(message):
 
         if bet_number.isdigit() and 0 <= int(bet_number) <= 36:
             user_balances[user_id] -= bet_amount
-            bets.setdefault(user_id, []).append((bet_number, bet_amount))
+            bets[game_id].setdefault(user_id, []).append((bet_number, bet_amount))
             bot.send_message(chat_id, f"💵 {get_username(user_id)}: {bet_number} numarasına {format_amount(bet_amount)} bahis yaptınız.")
         else:
             bot.send_message(chat_id, "❌ Geçersiz sayı. Lütfen 0-36 arasında bir sayı girin.")
@@ -403,7 +409,8 @@ def multinumber_bet(message):
     chat_id = message.chat.id
     user_id = message.from_user.id
 
-    if chat_id not in active_games:
+    game_id = active_games.get(chat_id)
+    if not game_id:
         bot.send_message(chat_id, "❌ Aktif bir rulet oyunu bulunmamaktadır. Lütfen önce /rulet komutu ile bir oyun başlatın.")
         return
 
@@ -423,13 +430,13 @@ def multinumber_bet(message):
 
         for bet_number in bet_numbers:
             user_balances[user_id] -= bet_amount
-            bets.setdefault(user_id, []).append((bet_number, bet_amount))
+            bets[game_id].setdefault(user_id, []).append((bet_number, bet_amount))
         bot.send_message(chat_id, f"💵 {get_username(user_id)}: {', '.join(bet_numbers)} numaralarına {format_amount(bet_amount)} bahis yaptınız.")
     except (IndexError, ValueError):
         bot.send_message(chat_id, "❌ Geçersiz komut. Kullanım: /multinumber [bahis miktarı] [sayı(lar)]")
 
 # Rulet oyunu
-def roulette_game(chat_id, wheel_message_id):
+def roulette_game(chat_id, game_id, wheel_message_id):
     global bets  # Global olarak deklarasyon
 
     # Çark görselini sil
@@ -446,7 +453,7 @@ def roulette_game(chat_id, wheel_message_id):
     # Kazananları ve kaybedenleri belirle
     winners = []
     losers = []
-    for user_id, bets_list in bets.items():
+    for user_id, bets_list in bets.get(game_id, {}).items():
         total_winnings = 0
         total_losses = 0
         for bet in bets_list:
@@ -500,7 +507,7 @@ def roulette_game(chat_id, wheel_message_id):
     if losers:
         result_message += "😢 **Kaybedenler:**\n" + "\n".join(losers)
 
-    # Kazanan sayının görselini ve sonuç mesajını gönder
+        # Kazanan sayının görselini ve sonuç mesajını gönder
     try:
         image_url = get_image_url(result)  # Kazanan sayının görsel URL'si
         bot.send_photo(chat_id, image_url, caption=result_message, parse_mode="Markdown")
@@ -508,18 +515,15 @@ def roulette_game(chat_id, wheel_message_id):
         bot.send_message(chat_id, "❌ Görsel yüklenirken bir hata oluştu.")
 
     # Bahisleri temizle ve aktif oyunları güncelle
-    bets.clear()
-    active_games.remove(chat_id)
-
-    
-        # İstatistikleri kaydet
-        save_balances()
-
-    except (IndexError, ValueError):
-        bot.send_message(chat_id, "❌ Geçersiz komut. Kullanım: /moneys [miktar] (bir mesajı yanıtlayarak)\nÖrnek: /moneys 100M 🪙")
-
+    del bets[game_id]
+    del active_games[chat_id]
 @bot.message_handler(commands=['leaderboard'])
 def leaderboard(message):
+    if not user_balances:
+        bot.send_message(message.chat.id, "Henüz hiç kullanıcı yok!", parse_mode="Markdown")
+        return
+
+    # Kullanıcıları bakiye sırasına göre sırala
     sorted_users = sorted(user_balances.items(), key=lambda x: x[1], reverse=True)
     top_users = sorted_users[:10]  # İlk 10 kullanıcıyı al
 
@@ -527,49 +531,48 @@ def leaderboard(message):
     leaderboard_text = "🏆 *Liderlik Tablosu* 🏆\n\n"
     leaderboard_text += "🌟 *En Zengin Oyuncular* 🌟\n\n"
 
-    # İlk 3 kullanıcıyı özel olarak göster
+    # İlk 3 kullanıcı için özel gösterişli rakamlar
     if len(top_users) >= 1:
         user_id, balance = top_users[0]
         username = get_username(user_id)
         level = get_level(balance)
         leaderboard_text += (
-            f"        🥇 *{username} 👑*\n"  # Taç emojisi eklendi
-            f"        ├── 💰 Bakiye: `{format_amount(balance)}`\n"
-            f"        ├── 🏅 Seviye: {level}\n"
-            f"        └── 📊 Level: 1\n\n"
+            f"🥇 🆔 [{username}](tg://user?id={user_id}) - `{format_amount(balance)}`\n"
+            f"   🏅 Seviye: *{level}*\n\n"
+        )
+
+    if len(top_users) >= 2:
+        user_id2, balance2 = top_users[1]
+        username2 = get_username(user_id2)
+        level2 = get_level(balance2)
+        leaderboard_text += (
+            f"🥈 🆔 [{username2}](tg://user?id={user_id2}) - `{format_amount(balance2)}`\n"
+            f"   🏅 Seviye: *{level2}*\n\n"
         )
 
     if len(top_users) >= 3:
-        user_id2, balance2 = top_users[1]
         user_id3, balance3 = top_users[2]
-        username2 = get_username(user_id2)
         username3 = get_username(user_id3)
-        level2 = get_level(balance2)
         level3 = get_level(balance3)
         leaderboard_text += (
-            f"🥈 *{username2}*          🥉 *{username3}*\n"
-            f"├── 💰 `{format_amount(balance2)}`    ├── 💰 `{format_amount(balance3)}`\n"
-            f"├── 🏅 {level2}        ├── 🏅 {level3}\n"
-            f"└── 📊 2                └── 📊 3\n\n"
+            f"🥉 🆔 [{username3}](tg://user?id={user_id3}) - `{format_amount(balance3)}`\n"
+            f"   🏅 Seviye: *{level3}*\n\n"
         )
 
-    # Diğer kullanıcıları alt alta göster
+    # Diğer kullanıcılar (4'ten 10'a kadar)
     for i, (user_id, balance) in enumerate(top_users[3:], start=4):
         username = get_username(user_id)
         level = get_level(balance)
         leaderboard_text += (
-            f"{i}️⃣ *{username}*\n"
-            f"├── 💰 Bakiye: `{format_amount(balance)}`\n"
-            f"├── 🏅 Seviye: {level}\n"
-            f"└── 📊 Level: {i}\n\n"
+            f"{i}️⃣ 🆔 [{username}](tg://user?id={user_id}) - `{format_amount(balance)}`\n"
+            f"   🏅 Seviye: *{level}*\n\n"
         )
 
     # Alt bilgi
     leaderboard_text += "🔝 Daha yükseğe çıkmak için rulet oynamaya devam edin!"
 
-    # Mesajı gönder
+    # Mesajı gönder (Markdown formatında)
     bot.send_message(message.chat.id, leaderboard_text, parse_mode="Markdown")
-
 # Yardım komutu
 @bot.message_handler(commands=['help'])
 def help_command(message):
